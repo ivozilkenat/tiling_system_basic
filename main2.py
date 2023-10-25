@@ -119,12 +119,6 @@ class Drawable(ABC):
     def draw(self):
         raise NotImplementedError
 
-    def release(self):
-        pass
-
-    #def __hash__(self):
-    #     return
-
 # Tiles
 class Tile(Drawable):
     def __init__(self, display, x, y, size, color = Vec3(0, 0, 0)):
@@ -387,9 +381,9 @@ class Game:
 
         # === Game Logic
 
-        self.max_speed = 1
-        self.turn_speed = 0.01
-        self.stop_speed = 0.05
+        self.max_speed = 0.6
+        self.turn_speed = 0.008
+        self.stop_speed = 0.006
 
         self.player_1 = Player(self.screen, pos=Vec2(100, 100))
 
@@ -524,6 +518,10 @@ class CollisionObj(GameObj):
     def __init__(self, pos: Vec2, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.pos = pos
+
+    def on_collide(self, other_collision_obj):
+        pass
+
 
 class StaticCollisionObj(CollisionObj):
     def __init__(self, *args, **kwargs):

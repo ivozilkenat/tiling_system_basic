@@ -542,7 +542,7 @@ if __name__ == "__main__":
     # Create a window
     screen = pygame.display.set_mode((WIDTH_SCALED, HEIGHT_SCALED), pygame.RESIZABLE)
 
-    grid = GridSystem3(screen, *(41, 21), 0.1)
+    grid = GridSystem3(screen, *(81, 41), 0.1)
 
     WHITE = (255, 255, 255)
 
