@@ -543,7 +543,7 @@ class DynamicCollisionObj(CollisionObj):
 class PlayerCollisionObj(DynamicCollisionObj):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.radius = 20 # diameter of circle
+        self.radius = 10 # TODO: should scale with window size
         self.width = self.radius * 2
 
     def update(self, dt):
@@ -557,12 +557,12 @@ class PlayerCollisionObj(DynamicCollisionObj):
 
 
 class PlayerModel(Drawable):
-    def __init__(self, display, player):
+    def __init__(self, display, player_collision_model):
         super().__init__(display)
-        self.player = player
+        self.collision_model = player_collision_model
 
     def draw(self):
-        pygame.draw.circle(self.display, (255, 0, 0), self.player.pos.to_tuple(), self.player.radius)
+        pygame.draw.circle(self.display, (255, 0, 0), self.collision_model.pos.to_tuple(), self.collision_model.radius)
 
 
 # # Always updated
@@ -586,13 +586,14 @@ def render_test(grid: MapGridManager):
     test_tile.color = Vec3(255, 0, 0)
     test_tile.draw()
 
+
 if __name__ == "__main__":
     # Initialize Pygame
     pygame.init()
 
     # Constants for the window size
     WIDTH, HEIGHT = 1920, 1080
-    WINDOW_SCALE = 1
+    WINDOW_SCALE = 0.6
     WIDTH_SCALED, HEIGHT_SCALED = WIDTH * WINDOW_SCALE, HEIGHT * WINDOW_SCALE
 
     game = Game(WIDTH_SCALED, HEIGHT_SCALED)
