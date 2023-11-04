@@ -17,8 +17,8 @@ def print_matrix(matrix):
         print(i)
     print("]")
 
-# Todo: to be tested
 # matrix is here defined as a nxn list array
+# TODO: conceptually used several times
 def get_sub_matrix(matrix, start_x, start_y, width, height):
     assert len(matrix[0]) >= start_x + width
     assert len(matrix) >= start_y + height
@@ -47,20 +47,37 @@ class Vec2:
         else:
             raise ValueError("Invalid operand")
 
+    def __eq__(self, other):
+        return self.x == other.x and self.y == other.y
+
     def __str__(self):
         return f"Vec2({self.x}, {self.y})"
-
-    def norm(self):
-        absolute = self.abs()
-        if absolute == 0:
-            return Vec2(0, 0) # TODO: return None?
-        return self * (1 / self.abs())
 
     def abs(self):
         return abs(math.sqrt(self.x**2 + self.y**2))
 
     def to_tuple(self):
         return self.x, self.y
+
+    def is_null(self):
+        return self.x == 0 and self.y == 0
+
+    def scalar_product(self, other):
+        return self.x * other.x + self.y * other.y
+
+    def to_normal(self):
+        absolute = self.abs()
+        if absolute == 0:
+            return
+        self.x = self.x * (1 / absolute)
+        self.y = self.y * (1 / absolute)
+
+    @staticmethod
+    def as_normal(vec):
+        absolute = vec.abs()
+        if absolute == 0:
+            return Vec2(0, 0)  # TODO: return None?
+        return vec * (1 / absolute)
 
 
 class Vec3:
@@ -82,8 +99,97 @@ class Vec3:
     def __str__(self):
         return f"Vec2({self.x}, {self.y}, {self.z})"
 
+    def __eq__(self, other):
+        return self.x == other.x and self.y == other.y and self.z == other.z
+
     def to_tuple(self):
         return self.x, self.y, self.z
+
+
+class Straight:
+    # Necessary for floating point errors
+    DECIMAL_PRECISION = 5
+
+    def __init__(self, support_vector: Vec2, dir_vector: Vec2):
+        assert not dir_vector.is_null()
+        self.support_vec = support_vector
+        self.dir_vec = dir_vector
+
+    def __eq__(self, other):
+        return self.collinear_to(other) and self.on_straight(other.support_vec)
+
+    def get_point(self, x):
+        return self.support_vec + self.dir_vec * x
+
+    def get_x(self, point: Vec2):
+        r1 = (point.x - self.support_vec.x)/self.dir_vec.x
+        r2 = (point.y - self.support_vec.y)/self.dir_vec.y
+        return r1 if round(r1 - r2, self.DECIMAL_PRECISION) == 0 else None
+
+    # Maybe static?
+    def on_straight(self, point: Vec2):
+        return True if self.get_x(point) is not None else False
+
+    def collinear_to(self, other_straight):
+        return round(other_straight.dir_vec.x / self.dir_vec.x - other_straight.dir_vec.y / self.dir_vec.y, self.DECIMAL_PRECISION) == 0
+
+    # Returns 1 point (1 intersection), straight (identical), None (no intersection)
+    def intersection_with_straight(self, other_straight):
+        # - check for collinearity
+        if self.collinear_to(other_straight):
+            # - check identical
+            if self == other_straight:
+                return self
+            return None
+
+        delta_x = other_straight.support_vec.x - self.support_vec.x
+        delta_y = other_straight.support_vec.y - self.support_vec.y
+        s = (delta_y * self.dir_vec.x - delta_x * self.dir_vec.y)/(self.dir_vec.y * other_straight.dir_vec.x - self.dir_vec.x * other_straight.dir_vec.y)
+        r = (delta_y + s * other_straight.dir_vec.y)/self.dir_vec.y
+
+        # Check first equation
+        return self.get_point(r) if 0 == round(r * self.dir_vec.x - s * other_straight.dir_vec.x - delta_x, self.DECIMAL_PRECISION) else None
+
+
+# Maybe as Straight sublass changing all methods to check if on stretch,
+# since stretch is basically straight but with special check if point on stretch interval
+class Stretch:
+    DECIMAL_PRECISION = 5
+
+    def __init__(self, start: Vec2, end: Vec2):
+        self.start = start
+        self.end = end
+        self.straight = Straight(start, end - start)
+
+    def get_x(self, point: Vec2):
+        r1 = (point.x - self.straight.support_vec.x) / self.straight.dir_vec.x
+        r2 = (point.y - self.straight.support_vec.y) / self.straight.dir_vec.y
+        if 0 != round(r2 - r1, self.DECIMAL_PRECISION) or not (0 <= r1 <= 1):
+            return None
+        return r1
+
+    def on_stretch(self, point: Vec2):
+        return True if self.get_x(point) is not None else False
+
+    def intersection_with_stretch(self, other_stretch):
+        res = self.straight.intersection_with_straight(other_stretch.straight)
+        if res is None:
+            return None
+        return res if self.on_stretch(res) and other_stretch.on_stretch(res) else None
+
+    def intersection_with_straight(self, other_straight: Straight):
+        res = self.straight.intersection_with_straight(other_straight)
+        if res is None:
+            return None
+        return res if self.on_stretch(res) else None
+
+    # Enlarge stretch at both ends with absolute amount
+    @staticmethod
+    def as_enlarged(stretch, enlargement_amount):
+        new_start_point = stretch.start + Vec2.as_normal(stretch.straight.dir_vec) * (-enlargement_amount)
+        new_end_point = new_start_point + stretch.straight.dir_vec * (stretch.straight.dir_vec.abs() + 2 * enlargement_amount)
+        return Stretch(new_start_point, new_end_point)
+
 
 # Take any height and width and make an addressable coordinate system out of that allowing (x, y) selection from the center
 # Todo: assert anything about divisibility
@@ -110,6 +216,7 @@ class CoordinateSystem:
 # TODO: desired: Exact width of playing grid should be provided
 # TODO: is auto resizing allowed? => changes grid size
 
+
 # Base class to represent objects that can be drawn to the screen
 class Drawable(ABC):
     def __init__(self, display):
@@ -118,6 +225,7 @@ class Drawable(ABC):
     @abstractmethod
     def draw(self):
         raise NotImplementedError
+
 
 # Tiles
 class Tile(Drawable):
@@ -150,6 +258,7 @@ class Tile(Drawable):
     def __hash__(self):
         return hash((1/2) * ( self.x + self.y ) * ( self.x + self.y + 1 ) + self.y + self.color.x + self.color.y + self.color.z)
 
+
 # Collection of Tiles
 class TileSet:
     def __init__(self, *args, **kwargs):
@@ -167,6 +276,7 @@ class TileSet:
         ts = TileSet()
         ts.tiles = tile_set
         return ts
+
 
 # Grid of tiles in matrix
 class TileGrid(TileSet):
@@ -197,6 +307,7 @@ class TileGrid(TileSet):
         tg.tiles = tiles
         tg.set_grid(tile_matrix)
         return tg
+
 
 # Divide screen into intractable/addressable grid fields
 class MapGridManager:
@@ -352,6 +463,7 @@ class MapGridManager:
 
         return tiles
 
+
 # Render anything using proactive update calls for each drawable object
 # How to delete something render queue? set seems to do weird stuff
 class Renderer:
@@ -368,6 +480,7 @@ class Renderer:
     def render_all_updates(self):
         while not self.render_update_queue.empty():
             self.render_next_update()
+
 
 # Aggregate all game logic and classes
 class Game:
@@ -488,13 +601,14 @@ class Game:
         for t in self.grid_manager.grid_tiles:
             self.renderer.add_to_update_queue(t)
 
+
 # Has to resolve any physics related task during each tick. Includes
 # - applying movement
 # - solving collisions
 # - do that efficiently (check game chunk wise; separate between dynamic and static objects
-
 class PhysicsHandler:
     def __init__(self):
+        self.physics_objects = list() # should be set
         self.update_queue = queue.Queue()
 
     def add_to_update_queue(self, obj):
@@ -502,27 +616,69 @@ class PhysicsHandler:
 
     def update_next(self, dt):
         assert not self.update_queue.empty()
-        self.update_queue.get().update(dt)
+        update_obj = self.update_queue.get()
+        # Run physics
+        # Check if collisions are happening
+
+        # Apply changes
+        update_obj.update(dt)
 
     def update_all(self, dt):
         while not self.update_queue.empty():
             self.update_next(dt)
 
 
+# Basic conceptual representation of in-game objects
 class GameObj(ABC):
     def __init__(self, *args, **kwargs):
         pass
 
 
-class CollisionObj(GameObj):
-    def __init__(self, pos: Vec2, *args, **kwargs):
+# Objects which follow physical interactions (must not take up space)
+class PhysicsObj(GameObj):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.pos = pos
 
-    def on_collide(self, other_collision_obj):
+    @abstractmethod
+    def update(self, dt):
+        raise NotImplementedError
+
+
+# Implement handler for all geometry models
+class CollisionHandler:
+    def __init__(self):
         pass
 
 
+class PhysicsModel(ABC):
+    def __init__(self, position, direction, magnitude, *args, **kwargs):
+        self.pos = position
+        self.dir = direction  # Must be normed
+        self.mag = magnitude
+
+    def next_position(self, dt):
+        return self.pos + self.dir * self.mag * dt
+
+    def update_position(self, dt):
+        self.pos = self.next_position(dt)
+
+
+class CirclePhysicsModel(PhysicsModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.radius = 10  # TODO: should scale with window size
+        self.width = self.radius * 2
+
+
+class CollisionObj(PhysicsObj):
+    def __init__(self, physics_model, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.physics_model = physics_model
+
+
+
+# Not active collision checks necessary
 class StaticCollisionObj(CollisionObj):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -565,7 +721,7 @@ class PlayerModel(Drawable):
         pygame.draw.circle(self.display, (255, 0, 0), self.collision_model.pos.to_tuple(), self.collision_model.radius)
 
 
-# # Always updated
+# # Always updated -> Currently handled in Game Class
 # class RealTimeObj(ABC):
 #     def __init__(self):
 #         pass
@@ -591,6 +747,13 @@ if __name__ == "__main__":
     # Initialize Pygame
     pygame.init()
 
+    s1 = Stretch(Vec2(2, 10), Vec2(12, -6))
+    s2 = Stretch(Vec2(5, 5), Vec2(10, 10))
+    print(s1.intersection_with_stretch(s2))
+
+    #print(f"Intersection: {s1.intersection(s2)}")
+
+    quit()
     # Constants for the window size
     WIDTH, HEIGHT = 1920, 1080
     WINDOW_SCALE = 0.6
