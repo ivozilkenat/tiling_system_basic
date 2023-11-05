@@ -490,6 +490,9 @@ class Game:
         self.renderer = Renderer()
         self.physics_handler = PhysicsHandler()
 
+        # build map barrier collisions
+        Wall
+
         self.running = False
 
         # === Game Logic
@@ -498,7 +501,7 @@ class Game:
         self.turn_speed = 0.008
         self.stop_speed = 0.006
 
-        self.player_1 = Player(self.screen, pos=Vec2(100, 100))
+        self.player_1 = Player(self.screen, pos=Vec2(100, 100), direction=Vec2(1, 0), speed=1)
 
         self.dynamic_objects = set()
         self.dynamic_objects.add(self.player_1)
@@ -532,15 +535,16 @@ class Game:
         # Update the screen
         pygame.display.flip()
 
+    # TODO: only temporary
     def update_realtime_objs(self):
         # Get position before, to redraw tiles (bounding rectangle necessary)
-        bounding_rect = self.player_1.collision_model.get_bounding_rect() # Extra class for rect?
+        bounding_rect = self.player_1.physics_model.get_bounding_rect() # Extra class for rect?
         player_tiles = self.grid_manager.get_tiles_by_rect(bounding_rect)
         for t in player_tiles:
             t.color = Vec3(0, 255, 0)
             self.renderer.add_to_update_queue(t)
 
-        self.physics_handler.add_to_update_queue(self.player_1.collision_model)
+        self.physics_handler.add_to_update_queue(self.player_1.physics_model)
         self.renderer.add_to_update_queue(self.player_1.graphics_model)
 
     def handle_events(self, events, dt):
@@ -563,28 +567,26 @@ class Game:
 
         # Player 1 handling only currently
         any_key_pressed = False
-        if self.player_1.collision_model.dir.abs() < self.max_speed:
+        if self.player_1.physics_model.dir.abs() < self.max_speed:
             if keys[pygame.K_w]:
-                self.player_1.collision_model.dir.y -= self.turn_speed * dt # how to handle x mirroring?
+                self.player_1.physics_model.dir.y -= self.turn_speed * dt # how to handle x mirroring?
                 any_key_pressed = True
 
             if keys[pygame.K_a]:
-                self.player_1.collision_model.dir.x -= self.turn_speed * dt
+                self.player_1.physics_model.dir.x -= self.turn_speed * dt
                 any_key_pressed = True
 
             if keys[pygame.K_s]:
-                self.player_1.collision_model.dir.y += self.turn_speed * dt
+                self.player_1.physics_model.dir.y += self.turn_speed * dt
                 any_key_pressed = True
 
             if keys[pygame.K_d]:
-                self.player_1.collision_model.dir.x += self.turn_speed * dt
+                self.player_1.physics_model.dir.x += self.turn_speed * dt
                 any_key_pressed = True
 
         if not any_key_pressed:
-            new_abs = max(0, self.player_1.collision_model.dir.abs() - self.stop_speed * dt)
-            self.player_1.collision_model.dir = self.player_1.collision_model.dir.norm() * new_abs
-
-
+            new_abs = max(0, self.player_1.physics_model.dir.abs() - self.stop_speed * dt)
+            self.player_1.physics_model.dir = Vec2.as_normal(self.player_1.physics_model.dir) * new_abs
 
     def set_caption_fps(self, d_time):
         if d_time > 0:
@@ -618,10 +620,14 @@ class PhysicsHandler:
         assert not self.update_queue.empty()
         update_obj = self.update_queue.get()
         # Run physics
+        # Do not update walls for movement and collision
+        if update_obj.MOVEMENT_STATIC:
+            return
         # Check if collisions are happening
+        # Trivial solution: test against all objects (in the future: use grid based system from tiles)
 
         # Apply changes
-        update_obj.update(dt)
+        update_obj.update_position(dt)
 
     def update_all(self, dt):
         while not self.update_queue.empty():
@@ -634,14 +640,12 @@ class GameObj(ABC):
         pass
 
 
-# Objects which follow physical interactions (must not take up space)
+# Objects which follow physical interactions that are visible
 class PhysicsObj(GameObj):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-    @abstractmethod
-    def update(self, dt):
-        raise NotImplementedError
+        self.physics_model = None
+        self.graphics_model = None
 
 
 # Implement handler for all geometry models
@@ -650,11 +654,32 @@ class CollisionHandler:
         pass
 
 
+# Abstract physical representation of dynamic objects
 class PhysicsModel(ABC):
+    MOVEMENT_STATIC = False # No movement code must be supplied
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def next_position(self, dt):
+        if not self.MOVEMENT_STATIC:
+            raise NotImplementedError
+
+    def update_position(self, dt):
+        if not self.MOVEMENT_STATIC:
+            raise NotImplementedError
+
+
+class PhysicsPointModel(PhysicsModel):
     def __init__(self, position, direction, magnitude, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.pos = position
         self.dir = direction  # Must be normed
         self.mag = magnitude
+
+        self.check_collisions = True
+        self.skip_pos_update = False
+        # Practical for static objects => also not supposed to be checked in collision calculation
 
     def next_position(self, dt):
         return self.pos + self.dir * self.mag * dt
@@ -663,97 +688,58 @@ class PhysicsModel(ABC):
         self.pos = self.next_position(dt)
 
 
-class CirclePhysicsModel(PhysicsModel):
+# Basic circle model
+class CirclePhysicsModel(PhysicsPointModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.radius = 10  # TODO: should scale with window size
         self.width = self.radius * 2
 
-
-class CollisionObj(PhysicsObj):
-    def __init__(self, physics_model, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.physics_model = physics_model
-
-
-
-# Not active collision checks necessary
-class StaticCollisionObj(CollisionObj):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-
-class DynamicCollisionObj(CollisionObj):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        self.dir = Vec2(1, 0)  # always has to be normalized
-        #self.speed = 0
-
-    @abstractmethod
-    def update(self, dt):
-        raise NotImplementedError
-
-
-class PlayerCollisionObj(DynamicCollisionObj):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.radius = 10 # TODO: should scale with window size
-        self.width = self.radius * 2
-
-    def update(self, dt):
-        #move_vec = self.dir * self.speed
-        move_vec = self.dir
-        self.pos = self.pos + move_vec * dt
-
-    # returns (x, y, width, height)
     def get_bounding_rect(self):
-        return (self.pos.x - self.radius, self.pos.y - self.radius, self.width, self.width)
+        return self.pos.x - self.radius, self.pos.y - self.radius, self.width, self.width
+
+
+# Basic building block for 1d walls
+class StaticBarrierModel(PhysicsModel):
+    MOVEMENT_STATIC = True
+
+    def __init__(self, start, end, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.stretch = Stretch(start, end)
+
+
+class PlayerPhysicsModel(CirclePhysicsModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
 
 class PlayerModel(Drawable):
-    def __init__(self, display, player_collision_model):
+    def __init__(self, display, player_physics_model):
         super().__init__(display)
-        self.collision_model = player_collision_model
+        self.physics_model = player_physics_model
 
     def draw(self):
-        pygame.draw.circle(self.display, (255, 0, 0), self.collision_model.pos.to_tuple(), self.collision_model.radius)
+        pygame.draw.circle(self.display, (255, 0, 0), self.physics_model.pos.to_tuple(), self.physics_model.radius)
 
 
-# # Always updated -> Currently handled in Game Class
-# class RealTimeObj(ABC):
-#     def __init__(self):
-#         pass
-#
-#     @abstractmethod
-#     def update(self, *args, **kwargs):
-#         raise NotImplementedError
-
-class Player:
-    def __init__(self, display, pos):
+class Player(PhysicsObj):
+    def __init__(self, display, pos, direction, speed):
         super().__init__()
-        self.collision_model = PlayerCollisionObj(pos)
-        self.graphics_model = PlayerModel(display, self.collision_model)
+        self.physics_model = PlayerPhysicsModel(pos, direction, speed)
+        self.graphics_model = PlayerModel(display, self.physics_model)
 
 
-def render_test(grid: MapGridManager):
-    test_tile = grid.tile_grid_map.get_tile(Vec2(20, -10))
-    test_tile.color = Vec3(255, 0, 0)
-    test_tile.draw()
+class BorderWall(PhysicsObj):
+    def __init__(self, start, end):
+        super().__init__()
+        self.physics_model = StaticBarrierModel(start, end)
 
 
 if __name__ == "__main__":
     # Initialize Pygame
     pygame.init()
 
-    s1 = Stretch(Vec2(2, 10), Vec2(12, -6))
-    s2 = Stretch(Vec2(5, 5), Vec2(10, 10))
-    print(s1.intersection_with_stretch(s2))
-
-    #print(f"Intersection: {s1.intersection(s2)}")
-
-    quit()
     # Constants for the window size
     WIDTH, HEIGHT = 1920, 1080
     WINDOW_SCALE = 0.6
