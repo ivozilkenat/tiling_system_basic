@@ -157,15 +157,36 @@ class Straight:
         return self.support_vec + self.dir_vec * x
 
     def get_x(self, point: Vec2):
-        r1 = (point.x - self.support_vec.x)/self.dir_vec.x
-        r2 = (point.y - self.support_vec.y)/self.dir_vec.y
+        delta_x = point.x - self.support_vec.x
+        delta_y = point.y - self.support_vec.y
+
+        if self.dir_vec.x == 0:
+            if delta_x != 0:
+                return None
+            r1 = 0
+        else:
+            r1 = delta_x / self.dir_vec.x
+
+        if self.dir_vec.y == 0:
+            if delta_y != 0:
+                return None
+            r2 = 0
+        else:
+            r2 = delta_y/self.dir_vec.y
+
         return r1 if round(r1 - r2, self.DECIMAL_PRECISION) == 0 else None
 
     # Maybe static?
     def on_straight(self, point: Vec2):
         return True if self.get_x(point) is not None else False
 
+    # Also return stretch factor?
     def collinear_to(self, other_straight):
+        if self.dir_vec.x == 0:
+            return other_straight.dir_vec.x == 0
+        elif self.dir_vec.y == 0:
+            return other_straight.dir_vec.y == 0
+
         return round(other_straight.dir_vec.x / self.dir_vec.x - other_straight.dir_vec.y / self.dir_vec.y, self.DECIMAL_PRECISION) == 0
 
     # Returns 1 point (1 intersection), straight (identical), None (no intersection)
@@ -177,9 +198,16 @@ class Straight:
                 return self
             return None
 
+        ### TODO: add case distinction
+
         delta_x = other_straight.support_vec.x - self.support_vec.x
         delta_y = other_straight.support_vec.y - self.support_vec.y
-        s = (delta_y * self.dir_vec.x - delta_x * self.dir_vec.y)/(self.dir_vec.y * other_straight.dir_vec.x - self.dir_vec.x * other_straight.dir_vec.y)
+
+        denominator = self.dir_vec.y * other_straight.dir_vec.x - self.dir_vec.x * other_straight.dir_vec.y
+        if round(denominator, self.DECIMAL_PRECISION) == 0:
+            print("DENOMINATOR IS ZERO")
+
+        s = (delta_y * self.dir_vec.x - delta_x * self.dir_vec.y)/denominator
         r = (delta_y + s * other_straight.dir_vec.y)/self.dir_vec.y
 
         # Check first equation
@@ -218,11 +246,14 @@ class Stretch:
             return None
         return res if self.on_stretch(res) else None
 
+    def get_len(self):
+        return self.straight.dir_vec.abs()
+
     # Enlarge stretch at both ends with absolute amount
     @staticmethod
     def as_enlarged(stretch, enlargement_amount):
         new_start_point = stretch.start + Vec2.as_normal(stretch.straight.dir_vec) * (-enlargement_amount)
-        new_end_point = new_start_point + stretch.straight.dir_vec * (stretch.straight.dir_vec.abs() + 2 * enlargement_amount)
+        new_end_point = new_start_point + Vec2.as_normal(stretch.straight.dir_vec) * (stretch.straight.dir_vec.abs() + 2 * enlargement_amount)
         return Stretch(new_start_point, new_end_point)
 
 
@@ -715,7 +746,7 @@ class PhysicsHandler:
                 continue
 
             # TODO: get physics model here? It must be implemented anyways
-            CollisionHandler.check_and_resolve(update_obj, obj)
+            CollisionHandler.check_and_resolve(dt, update_obj, obj)
 
         # Apply changes
         update_obj.update_position(dt)
@@ -746,27 +777,40 @@ class CollisionHandler:
 
     # Checks if proper collision handler can be found
     @staticmethod
-    def check_and_resolve(first, second):
-        if CollisionHandler.find_solver_and_run(first, second):
+    def check_and_resolve(dt, first, second):
+        if CollisionHandler.find_solver_and_run(dt, first, second):
             return True
-        elif CollisionHandler.find_solver_and_run(second, first):
+        elif CollisionHandler.find_solver_and_run(dt, second, first):
             return True
         raise NotImplementedError
 
     @staticmethod
-    def find_solver_and_run(first, second):
+    def find_solver_and_run(dt, first, second):
         if isinstance(first, CirclePhysicsModel) and isinstance(second, StaticBarrierModel):
-            CollisionHandler.dynamic_circle_static_barrier_solver(first, second)
+            CollisionHandler.dynamic_circle_static_barrier_solver(dt, first, second)
             return True
         return False
 
     # === PHYSICS SOLVER CODE ===
 
     @staticmethod
-    def dynamic_circle_static_barrier_solver(circle, barrier):
-        print("checking collision stuff")
-
+    def dynamic_circle_static_barrier_solver(dt, circle_model, barrier_model):
         ### TODO: CONTINUE HERE
+        # Enlarge barrier
+        tmp_barrier_stretch = Stretch.as_enlarged(
+            barrier_model.stretch, circle_model.radius
+        )
+        tmp_mvmt_stretch = Stretch(
+            circle_model.pos,
+            circle_model.next_position(dt)
+        )
+        # Check collision
+        collision_point = tmp_mvmt_stretch.intersection_with_stretch(tmp_barrier_stretch)
+        if collision_point is None:
+            return
+
+        # Resolve collision
+        print("Collision detected")
 
 
 # Abstract physical representation of dynamic objects
