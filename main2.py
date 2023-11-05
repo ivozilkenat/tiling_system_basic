@@ -11,12 +11,6 @@ from typing import List, Set, Tuple
 # Tiles are typically 16x16 oder 32x32
 # Todo: draw tiles in a single call
 
-def print_matrix(matrix):
-    print("[")
-    for i in matrix:
-        print(i)
-    print("]")
-
 # matrix is here defined as a nxn list array
 # TODO: conceptually used several times
 def get_sub_matrix(matrix, start_x, start_y, width, height):
@@ -29,6 +23,47 @@ def get_sub_matrix(matrix, start_x, start_y, width, height):
             sub_matrix[y-start_y].append(matrix[y][x])
 
     return sub_matrix
+
+
+# Useful wrapper for nested 2d lists
+# TODO: distinguish from matrices in mathematical context
+# TODO: NOT PROPERLY USED YET, but rather conceptual; see grid_tile_matrix thingy
+# TODO: maybe not necessary
+class List2d:
+    def __init__(self, nested_container):
+        assert all(isinstance(i, list) for i in nested_container)
+        if len(nested_container) > 0:
+            first_len = len(nested_container[0])
+            assert all(len(i) == first_len for i in nested_container)
+
+        self.width = len(nested_container[0])
+        self.height = len(nested_container)
+        self.matrix = nested_container
+
+        self.coordinate_system = CoordinateSystem(self.width, self.height)
+
+    def get_sub_matrix(self, rect):
+        sub_matrix = [list() for _ in range(rect.height)]
+        for y in range(rect.y, rect.y + rect.height):
+            for x in range(rect.x, rect.x + rect.width):
+                sub_matrix[y - rect.y].append(self.matrix[y][x])
+
+        return sub_matrix
+
+    def __iter__(self):
+        return iter(self.matrix)
+
+    def __str__(self):
+        str = ""
+        str += "[\n"
+        for i in self.matrix:
+            str += f"{i},\n"
+        str += "]\n"
+        return str
+
+
+# Coordinate system is directly mapped to matrix like structure (e.g. list of lists) for access
+
 
 
 class Vec2:
@@ -191,6 +226,31 @@ class Stretch:
         return Stretch(new_start_point, new_end_point)
 
 
+# TODO: implement these classes where ever used
+class Rect:
+    def __init__(self, x, y, width, height):
+        self.x, self.y, self.width, self.height = x, y, width, height
+        self.pos = Vec2(x, y)
+        self.center = Vec2(self.x + self.width // 2, self.y + self.height // 2)
+
+    def get_upper_left(self):
+        return self.pos
+
+    def get_upper_right(self):
+        return self.pos + Vec2(self.width, 0)
+
+    def get_lower_right(self):
+        return self.pos + Vec2(self.width, self.height)
+
+    def get_lower_left(self):
+        return self.pos + Vec2(0, self.height)
+
+class Circle:
+    def __int__(self, x, y, radius):
+        self.x, self.y, self.radius = radius
+        self.pos = Vec2(x, y)
+
+
 # Take any height and width and make an addressable coordinate system out of that allowing (x, y) selection from the center
 # Todo: assert anything about divisibility
 class CoordinateSystem:
@@ -217,6 +277,8 @@ class CoordinateSystem:
 # TODO: is auto resizing allowed? => changes grid size
 
 
+
+
 # Base class to represent objects that can be drawn to the screen
 class Drawable(ABC):
     def __init__(self, display):
@@ -229,34 +291,29 @@ class Drawable(ABC):
 
 # Tiles
 class Tile(Drawable):
-    def __init__(self, display, x, y, size, color = Vec3(0, 0, 0)):
+    def __init__(self, display, x, y, size, color=Vec3(0, 0, 0)):
         super().__init__(display) # If hashing is used, this must be put to the bottom of the init
-
-        self.x: int = x
-        self.y: int = y
-        self.size: int = size
-
-        self.pos = Vec2(self.x, self.y)
-        self.center = Vec2(self.x + self.size // 2, self.y + self.size // 2)
-
-        #self.sprite = None
+        self.rect = Rect(x, y, size, size) # TODO: as rect or x, y etc as normal members?
+        self.size = size
         self.color: Vec3 = color
+
+        # self.sprite = None
 
         self.draw_border = True
 
     def draw(self):
-        pygame.draw.rect(self.display, self.color.to_tuple(), (self.x, self.y, self.size, self.size))
+        pygame.draw.rect(self.display, self.color.to_tuple(), (self.rect.x, self.rect.y, self.size, self.size))
         if self.draw_border:
             self.draw_borders()
 
-    def draw_borders(self, width = 1):
-        pygame.draw.rect(self.display, (0, 0, 0), (self.x, self.y, self.size, self.size), width)
+    def draw_borders(self, width=1):
+        pygame.draw.rect(self.display, (0, 0, 0), (self.rect.x, self.rect.y, self.size, self.size), width)
 
     def __eq__(self, other):
-        return self.x == other.x and self.y == other.y and self.size == other.size and self.pos == other.pos and self.color == other.color
+        return self.rect.x == other.rect.x and self.rect.y == other.rect.y and self.size == other.size and self.rect.pos == other.rect.pos and self.color == other.color
 
     def __hash__(self):
-        return hash((1/2) * ( self.x + self.y ) * ( self.x + self.y + 1 ) + self.y + self.color.x + self.color.y + self.color.z)
+        return hash((1/2) * ( self.rect.x + self.rect.y ) * ( self.rect.x + self.rect.y + 1 ) + self.rect.y + self.color.x + self.color.y + self.color.z)
 
 
 # Collection of Tiles
@@ -297,6 +354,10 @@ class TileGrid(TileSet):
         x, y = self.coordinate_system.virtual_to_pos(pos).to_tuple()
         return self.tile_grid[y][x]
 
+    # Tiles are returned as 4 tuple, starting with upper left going clockwise
+    def get_corner_tiles(self):
+        return self.tile_grid[0][0], self.tile_grid[0][self.width-1], self.tile_grid[self.height-1][self.width-1], self.tile_grid[self.height-1][0]
+
     @staticmethod
     def from_matrix(tile_matrix):
         tg = TileGrid(len(tile_matrix[0]), len(tile_matrix))
@@ -313,6 +374,7 @@ class TileGrid(TileSet):
 class MapGridManager:
     def __init__(self, screen: pygame.display, map_tile_width, map_tile_height, map_padding=0.1):
         # todo: check if tile height and width is odd?
+        # todo: odd tile width's are not properly tested
         # map and border is differentiated
         self.screen = screen
 
@@ -362,6 +424,7 @@ class MapGridManager:
     def _generate_tiles(self):
         self.grid_tile_matrix = self._setup_grid_tile_matrix()
         self.grid_tiles = self._setup_grid_tile_set()
+        self.grid_index_coordinate_system = None
 
     def _partition_tiles(self):
         # TODO: handle edge case: self.border_tile_width = 0 and self.border_tile_height = 0
@@ -385,6 +448,11 @@ class MapGridManager:
             self.border_tile_width, self.border_tile_height,
             self.map_tile_width, self.map_tile_height
         )
+        self.tiles_map_and_wall_matrix = get_sub_matrix(
+            self.grid_tile_matrix,
+            self.border_tile_width - 1, self.border_tile_height - 1,
+            self.map_tile_width + 2, self.map_tile_height + 2
+        )
         # ========================
         self.tiles_out_of_map = {t for t in self.grid_tiles if (t not in self.tiles_map and t not in self.tiles_wall)}
 
@@ -404,6 +472,7 @@ class MapGridManager:
         self.tile_set_wall = TileSet.from_set(self.tiles_wall)
         self.tile_set_out_of_map = TileSet.from_set(self.tiles_out_of_map)
         self.tile_grid_map = TileGrid.from_matrix(self.tiles_map_matrix)
+        self.tile_grid_map_and_wall = TileGrid.from_matrix(self.tiles_map_and_wall_matrix)
 
 
     def _setup_grid_tile_matrix(self) -> List[List[Vec2]]:
@@ -436,17 +505,17 @@ class MapGridManager:
     def tile_from_vec(self, virtual_pos: Vec2):
         return self.grid_tile_matrix[virtual_pos.y][virtual_pos.x]
 
+    # TODO: not tested; what about edge cases? e.g. player leaves tile map
+    # pos semantically translates to screen pixel pos
+    def get_tile_by_pos(self, pos: Vec2):
+        return self.tile_from_vec(self.get_tile_virtual_pos_by_pos(pos))
+
     # Naming fragwürdig
     def get_tile_virtual_pos_by_pos(self, pos: Vec2):
         pos_corrected = pos - self._tile_corner_offset
         x_tile = math.ceil(pos_corrected.x // self.tile_size_width)
         y_tile = math.ceil(pos_corrected.y // self.tile_size_width)
         return Vec2(x_tile, y_tile)
-
-    # TODO: not tested; what about edge cases? e.g. player leaves tile map
-    # pos semantically translates to screen pixel pos
-    def get_tile_by_pos(self, pos: Vec2):
-        return self.tile_from_vec(self.get_tile_virtual_pos_by_pos(pos))
 
     def get_tiles_by_rect(self, rect):
         upper_left_pos = Vec2(rect[0], rect[1])
@@ -490,9 +559,6 @@ class Game:
         self.renderer = Renderer()
         self.physics_handler = PhysicsHandler()
 
-        # build map barrier collisions
-        Wall
-
         self.running = False
 
         # === Game Logic
@@ -502,9 +568,15 @@ class Game:
         self.stop_speed = 0.006
 
         self.player_1 = Player(self.screen, pos=Vec2(100, 100), direction=Vec2(1, 0), speed=1)
+        self.physics_handler.physics_objects.append(self.player_1.physics_model)
 
         self.dynamic_objects = set()
         self.dynamic_objects.add(self.player_1)
+        # TODO: how to properly garbarge collect physics handler object list
+
+    def pre_run(self):
+        self.init_render_update()
+        self.build_map_barrier()
 
     def run(self): #dispatch into game thread
         self.running = True
@@ -514,7 +586,7 @@ class Game:
         # Clear the screen
         self.screen.fill((255, 255, 255))
 
-        self.init_render_update()
+        self.pre_run()
 
         while self.running:
             t0 = time.time()
@@ -598,10 +670,23 @@ class Game:
     def screen_resize_handler(self):
         self.grid_manager.update_grid()
         self.init_render_update()
+        self.build_map_barrier()
 
+    # Draw everything at least once
     def init_render_update(self):
         for t in self.grid_manager.grid_tiles:
             self.renderer.add_to_update_queue(t)
+
+    def build_map_barrier(self):
+        # build map barrier collisions
+        upper_left_c, upper_right_c, lower_right_c, lower_left_c = self.grid_manager.tile_grid_map_and_wall.get_corner_tiles()
+
+        top_wall = BorderWall(upper_left_c.rect.get_lower_right(), upper_right_c.rect.get_lower_left())
+        right_wall = BorderWall(upper_right_c.rect.get_lower_left(), lower_right_c.rect.get_upper_left())
+        bottom_wall = BorderWall(lower_right_c.rect.get_upper_left(), lower_left_c.rect.get_upper_right())
+        left_wall = BorderWall(lower_left_c.rect.get_upper_right(), upper_left_c.rect.get_lower_right())
+
+        self.physics_handler.physics_objects += [top_wall.physics_model, right_wall.physics_model, bottom_wall.physics_model, left_wall.physics_model] # TODO: how are objects removed?
 
 
 # Has to resolve any physics related task during each tick. Includes
@@ -625,6 +710,12 @@ class PhysicsHandler:
             return
         # Check if collisions are happening
         # Trivial solution: test against all objects (in the future: use grid based system from tiles)
+        for obj in self.physics_objects:
+            if obj == update_obj:
+                continue
+
+            # TODO: get physics model here? It must be implemented anyways
+            CollisionHandler.check_and_resolve(update_obj, obj)
 
         # Apply changes
         update_obj.update_position(dt)
@@ -652,6 +743,30 @@ class PhysicsObj(GameObj):
 class CollisionHandler:
     def __init__(self):
         pass
+
+    # Checks if proper collision handler can be found
+    @staticmethod
+    def check_and_resolve(first, second):
+        if CollisionHandler.find_solver_and_run(first, second):
+            return True
+        elif CollisionHandler.find_solver_and_run(second, first):
+            return True
+        raise NotImplementedError
+
+    @staticmethod
+    def find_solver_and_run(first, second):
+        if isinstance(first, CirclePhysicsModel) and isinstance(second, StaticBarrierModel):
+            CollisionHandler.dynamic_circle_static_barrier_solver(first, second)
+            return True
+        return False
+
+    # === PHYSICS SOLVER CODE ===
+
+    @staticmethod
+    def dynamic_circle_static_barrier_solver(circle, barrier):
+        print("checking collision stuff")
+
+        ### TODO: CONTINUE HERE
 
 
 # Abstract physical representation of dynamic objects
@@ -692,7 +807,6 @@ class PhysicsPointModel(PhysicsModel):
 class CirclePhysicsModel(PhysicsPointModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
         self.radius = 10  # TODO: should scale with window size
         self.width = self.radius * 2
 
