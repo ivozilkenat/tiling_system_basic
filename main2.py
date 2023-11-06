@@ -831,6 +831,8 @@ class CollisionHandler:
 
     @staticmethod
     def dynamic_circle_static_barrier_solver(dt, circle_model, barrier_model):
+        # Check collision by either 1.) check if new pos "went through" wall (disable with stuff like teleportation) 2.) check if new pos causes glitching into the barrier
+
         ### TODO: CONTINUE HERE -> provide feedback / reset circle position
         # Enlarge barrier
         b_stretch = barrier_model.get_stretch()
@@ -851,13 +853,9 @@ class CollisionHandler:
                 circle_model.next_position(dt)
             )
             # Check collision with straight (point refers to intersected point on stretch)
-            ### TODO: fix intersection detection
-
             collision_point = tmp_mvmt_stretch.intersection_with_stretch(tmp_barrier_stretch)
-            #print(tmp_mvmt_stretch.start, tmp_mvmt_stretch.end, tmp_barrier_stretch.start, tmp_barrier_stretch.end, collision_point)
             if collision_point is not None:
                 collision_detected = True
-                print("collision detected")
 
         # Check collision by distance
         if not collision_detected:
@@ -866,7 +864,8 @@ class CollisionHandler:
             if distance <= 0:
                 collision_detected = True
 
-        if not collision_detected:
+        if collision_detected:
+            print("correct collision")
             return
 
             # Resolve collision
