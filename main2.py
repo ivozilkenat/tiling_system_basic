@@ -100,7 +100,10 @@ class Vec2:
     def scalar_product(self, other):
         return self.x * other.x + self.y * other.y
 
-    def to_normal(self):
+    def get_normal(self):
+        return Vec2(self.y, -self.x)
+
+    def to_unit(self):
         absolute = self.abs()
         if absolute == 0:
             return
@@ -108,7 +111,7 @@ class Vec2:
         self.y = self.y * (1 / absolute)
 
     @staticmethod
-    def as_normal(vec):
+    def as_unit(vec):
         absolute = vec.abs()
         if absolute == 0:
             return Vec2(0, 0)  # TODO: return None?
@@ -163,16 +166,23 @@ class Straight:
         if self.dir_vec.x == 0:
             if delta_x != 0:
                 return None
-            r1 = 0
+            r1 = None # can be anything
         else:
             r1 = delta_x / self.dir_vec.x
 
         if self.dir_vec.y == 0:
             if delta_y != 0:
                 return None
-            r2 = 0
+            r2 = None
         else:
-            r2 = delta_y/self.dir_vec.y
+            r2 = delta_y / self.dir_vec.y
+
+        if r1 is None and r2 is None:
+            return 0
+        elif r1 is None:
+            return r2
+        elif r2 is None:
+            return r1
 
         return r1 if round(r1 - r2, self.DECIMAL_PRECISION) == 0 else None
 
@@ -204,12 +214,16 @@ class Straight:
         delta_y = other_straight.support_vec.y - self.support_vec.y
 
         denominator = self.dir_vec.y * other_straight.dir_vec.x - self.dir_vec.x * other_straight.dir_vec.y
-        if round(denominator, self.DECIMAL_PRECISION) == 0:
-            print("DENOMINATOR IS ZERO")
 
+        # TODO: denominator only 0 if straights parallel?
         s = (delta_y * self.dir_vec.x - delta_x * self.dir_vec.y)/denominator
-        r = (delta_y + s * other_straight.dir_vec.y)/self.dir_vec.y
 
+        if self.dir_vec.y == 0:
+            if other_straight.dir_vec.y == 0:
+                return other_straight.get_point(s) if delta_y == 0 else None
+            return other_straight.get_point(s) if 0 == round(s + delta_y / other_straight.dir_vec.y) else None
+
+        r = (delta_y + s * other_straight.dir_vec.y)/self.dir_vec.y
         # Check first equation
         return self.get_point(r) if 0 == round(r * self.dir_vec.x - s * other_straight.dir_vec.x - delta_x, self.DECIMAL_PRECISION) else None
 
@@ -225,11 +239,11 @@ class Stretch:
         self.straight = Straight(start, end - start)
 
     def get_x(self, point: Vec2):
-        r1 = (point.x - self.straight.support_vec.x) / self.straight.dir_vec.x
-        r2 = (point.y - self.straight.support_vec.y) / self.straight.dir_vec.y
-        if 0 != round(r2 - r1, self.DECIMAL_PRECISION) or not (0 <= r1 <= 1):
+        r = self.straight.get_x(point)
+        
+        if r is None:
             return None
-        return r1
+        return r if 0 <= r <= 1 else None
 
     def on_stretch(self, point: Vec2):
         return True if self.get_x(point) is not None else False
@@ -252,8 +266,8 @@ class Stretch:
     # Enlarge stretch at both ends with absolute amount
     @staticmethod
     def as_enlarged(stretch, enlargement_amount):
-        new_start_point = stretch.start + Vec2.as_normal(stretch.straight.dir_vec) * (-enlargement_amount)
-        new_end_point = new_start_point + Vec2.as_normal(stretch.straight.dir_vec) * (stretch.straight.dir_vec.abs() + 2 * enlargement_amount)
+        new_start_point = stretch.start + Vec2.as_unit(stretch.straight.dir_vec) * (-enlargement_amount)
+        new_end_point = new_start_point + Vec2.as_unit(stretch.straight.dir_vec) * (stretch.straight.dir_vec.abs() + 2 * enlargement_amount)
         return Stretch(new_start_point, new_end_point)
 
 
@@ -276,10 +290,30 @@ class Rect:
     def get_lower_left(self):
         return self.pos + Vec2(0, self.height)
 
+
 class Circle:
-    def __int__(self, x, y, radius):
-        self.x, self.y, self.radius = radius
+    def __init__(self, x, y, radius):
+        self.x, self.y, self.radius = x, y, radius
         self.pos = Vec2(x, y)
+
+    # TODO: use point abstraction or just vectors?
+    # negative if straight intersects circle
+    def distance_to_straight(self, straight):
+        tmp_straight = Straight(self.pos, straight.dir_vec.get_normal())
+        intersection = tmp_straight.intersection_with_straight(straight)
+        # TODO: None if on straight?
+        return (intersection - self.pos).abs() - self.radius
+
+    def distance_to_stretch(self, stretch):
+        tmp_straight = Straight(self.pos, stretch.straight.dir_vec.get_normal())
+        intersection = stretch.intersection_with_straight(tmp_straight)
+        if intersection is None:
+            d1 = (stretch.start - self.pos).abs()
+            d2 = (stretch.end - self.pos).abs()
+            if d1 < d2:
+                return d1 - self.radius
+            return d2 - self.radius
+        return (intersection - self.pos).abs() - self.radius
 
 
 # Take any height and width and make an addressable coordinate system out of that allowing (x, y) selection from the center
@@ -586,6 +620,8 @@ class Renderer:
 class Game:
     def __init__(self, width, height):
         self.screen = pygame.display.set_mode((width, height), pygame.RESIZABLE)
+        self.fps_cap = 0 # 0 equals None
+
         self.grid_manager = MapGridManager(self.screen, *(41, 21), 0.1)
         self.renderer = Renderer()
         self.physics_handler = PhysicsHandler()
@@ -622,7 +658,7 @@ class Game:
         while self.running:
             t0 = time.time()
 
-            dt = self.clock.tick() # TODO: should be given to the physics handler and multiplied into update functions
+            dt = self.clock.tick(self.fps_cap) # TODO: should be given to the physics handler and multiplied into update functions
 
             self.handle_events(pygame.event.get(), dt)
             self.update_realtime_objs()
@@ -689,7 +725,7 @@ class Game:
 
         if not any_key_pressed:
             new_abs = max(0, self.player_1.physics_model.dir.abs() - self.stop_speed * dt)
-            self.player_1.physics_model.dir = Vec2.as_normal(self.player_1.physics_model.dir) * new_abs
+            self.player_1.physics_model.dir = Vec2.as_unit(self.player_1.physics_model.dir) * new_abs
 
     def set_caption_fps(self, d_time):
         if d_time > 0:
@@ -795,22 +831,46 @@ class CollisionHandler:
 
     @staticmethod
     def dynamic_circle_static_barrier_solver(dt, circle_model, barrier_model):
-        ### TODO: CONTINUE HERE
+        ### TODO: CONTINUE HERE -> provide feedback / reset circle position
         # Enlarge barrier
+        b_stretch = barrier_model.get_stretch()
         tmp_barrier_stretch = Stretch.as_enlarged(
-            barrier_model.stretch, circle_model.radius
+            b_stretch, circle_model.radius
         )
-        tmp_mvmt_stretch = Stretch(
-            circle_model.pos,
-            circle_model.next_position(dt)
-        )
-        # Check collision
-        collision_point = tmp_mvmt_stretch.intersection_with_stretch(tmp_barrier_stretch)
-        if collision_point is None:
+
+        collision_detected = False
+
+        c_pos = circle_model.pos
+        c_pos_next = circle_model.next_position(dt)
+
+        # First check movement path collision otherwise distance
+
+        if c_pos != c_pos_next:
+            tmp_mvmt_stretch = Stretch(
+                circle_model.pos,
+                circle_model.next_position(dt)
+            )
+            # Check collision with straight (point refers to intersected point on stretch)
+            ### TODO: fix intersection detection
+
+            collision_point = tmp_mvmt_stretch.intersection_with_stretch(tmp_barrier_stretch)
+            #print(tmp_mvmt_stretch.start, tmp_mvmt_stretch.end, tmp_barrier_stretch.start, tmp_barrier_stretch.end, collision_point)
+            if collision_point is not None:
+                collision_detected = True
+                print("collision detected")
+
+        # Check collision by distance
+        if not collision_detected:
+            c_circle = circle_model.get_circle()
+            distance = c_circle.distance_to_stretch(b_stretch)
+            if distance <= 0:
+                collision_detected = True
+
+        if not collision_detected:
             return
 
-        # Resolve collision
-        print("Collision detected")
+            # Resolve collision
+            # print("Collision detected")
 
 
 # Abstract physical representation of dynamic objects
@@ -857,6 +917,9 @@ class CirclePhysicsModel(PhysicsPointModel):
     def get_bounding_rect(self):
         return self.pos.x - self.radius, self.pos.y - self.radius, self.width, self.width
 
+    def get_circle(self):
+        return Circle(self.pos.x, self.pos.y, self.radius)
+
 
 # Basic building block for 1d walls
 class StaticBarrierModel(PhysicsModel):
@@ -864,7 +927,11 @@ class StaticBarrierModel(PhysicsModel):
 
     def __init__(self, start, end, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.stretch = Stretch(start, end)
+        self.start = start
+        self.end = end
+
+    def get_stretch(self):
+        return Stretch(self.start, self.end)
 
 
 class PlayerPhysicsModel(CirclePhysicsModel):
