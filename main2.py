@@ -158,7 +158,7 @@ class Vec3:
 
 class Straight:
     # Necessary for floating point errors
-    DECIMAL_PRECISION = 5
+    DECIMAL_PRECISION = 5 # TODO: MOVE TO GLOBAL
 
     def __init__(self, support_vector: Vec2, dir_vector: Vec2):
         assert not dir_vector.is_null()
@@ -184,7 +184,6 @@ class Straight:
 
         if self.dir_vec.y == 0:
             if round(delta_y, self.DECIMAL_PRECISION) != 0:
-                print("DELTA Y", delta_y)
                 return None
             r2 = None
         else:
@@ -247,10 +246,18 @@ class Straight:
 
     def get_reflection_vec(self, vec: Vec2):
         norm_vec = self.dir_vec.get_normal()
-        a = vec.inner_angle(norm_vec)
-        norm_vec = norm_vec if a <= math.pi / 2 else norm_vec.get_counter()
+        norm_vec = norm_vec if vec.scalar_product(norm_vec) >= 0 else norm_vec.get_counter()
 
         return vec - norm_vec * 2 * (vec.scalar_product(norm_vec) / norm_vec.abs())
+
+    def get_parallel_component(self, vec: Vec2):
+        dir_vec = self.dir_vec
+        scalar_prod = dir_vec.scalar_product(vec)
+        if scalar_prod <= 0:
+            dir_vec = self.dir_vec.get_counter()
+            scalar_prod = -scalar_prod
+
+        return self.dir_vec * (self.dir_vec.scalar_product(vec) / self.dir_vec.abs()**2)
 
 
 # Maybe as Straight sublass changing all methods to check if on stretch,
@@ -274,9 +281,6 @@ class Stretch:
 
     def intersection_with_stretch(self, other_stretch):
         res = self.straight.intersection_with_straight(other_stretch.straight)
-
-        if other_stretch.start == Vec2(1088.0, 31.0) and res is not None:
-            print("iws", other_stretch.start, other_stretch.end, res, self.on_stretch(res), other_stretch.on_stretch(res), self.straight.get_x(res)) ### TODO: PROBLEM SEEMS TO BE THAT STRETCH CREATED BY MOVEMENT DOES NOT CHECK IF POINT IS ON IT CORRECTLY -> fixed?
 
         if res is None:
             return None
@@ -648,7 +652,7 @@ class Renderer:
 class Game:
     def __init__(self, width, height):
         self.screen = pygame.display.set_mode((width, height), pygame.RESIZABLE)
-        self.fps_cap = 10 # 0 equals None
+        self.fps_cap = 0 # 0 equals None
 
         self.grid_manager = MapGridManager(self.screen, *(41, 21), 0.1)
         self.renderer = Renderer()
@@ -819,7 +823,6 @@ class PhysicsHandler:
             CollisionHandler.check_and_resolve(dt, update_obj, obj)
 
 
-
     def update_all(self, dt):
         while not self.update_queue.empty():
             self.update_next(dt)
@@ -886,7 +889,6 @@ class CollisionHandler:
             )
             # Check collision with straight (point refers to intersected point on stretch)
             collision_point = tmp_mvmt_stretch.intersection_with_stretch(tmp_barrier_stretch)
-            #print(collision_point, c_pos_original, c_pos_new)
             if collision_point is not None:
                 collision_detected = True
 
@@ -903,25 +905,42 @@ class CollisionHandler:
 
             # Get intersection
 
-            if c_pos_original != c_pos_new:
-                dir_vec = c_pos_new - c_pos_original
+            dir_vec = c_pos_new - c_pos_original
+            s_normal = b_stretch.straight.dir_vec.get_normal()
+            scalar_prod = dir_vec.scalar_product(s_normal)
+            if scalar_prod < 0:
+                s_normal = s_normal.get_counter()
+                scalar_prod = -scalar_prod
+
+            # check movement direction and normal vector are not orthogonal
+            if dir_vec.abs() > 0 and round(scalar_prod, Straight.DECIMAL_PRECISION) != 0:
                 tmp_mvmt_straight = Straight(
                     c_pos_original,
                     dir_vec
                 )
 
-            else: # edge case if no movement but collision
-                dir_vec = b_stretch.straight.dir_vec.get_normal() #TODO: choose correct normal vector
+            else: # edge case if no movement but collision TODO: test (other obj has to suddenly appear in current obj)
+                dir_vec = s_normal
+                # Choose correct normal vector // if scalar product was 0 this is unkown
+                dir_vec = dir_vec if dir_vec.scalar_product(c_pos_original) > 0 else dir_vec.get_counter()
+                scalar_prod = dir_vec.scalar_product(dir_vec)
                 tmp_mvmt_straight = Straight(
                     c_pos_original,
                     dir_vec
                 )
 
+            # Assumption: collision point always exists
             collision_point_stretch = tmp_mvmt_straight.intersection_with_straight(b_stretch.straight)
-            #angle =  dir_vec.inner_angle(b_stretch.straight.dir_vec.get_normal())
-            #circle_model.pos = collision_point_stretch - Vec2.as_unit(dir_vec) * ((circle_model.radius + 1) / math.cos(angle)) # cos cancels acos
-            circle_model.pos = collision_point_stretch - Vec2.as_unit(dir_vec) * ((circle_model.radius + 1) / (dir_vec.scalar_product(b_stretch.straight.dir_vec.get_normal()) / dir_vec.abs()))
+            if collision_point_stretch is None:
+                print("OH NO, there must be an intersection")
 
+            # r + 0.5 as error margin
+            circle_model.pos = collision_point_stretch - dir_vec * ((circle_model.radius + 0.5) / scalar_prod)
+
+            # Break object against wall
+            circle_model.dir = b_stretch.straight.get_parallel_component(circle_model.dir)
+
+            #!!! Collision MUST be resolved after handling !!!
 
 
 # Abstract physical representation of dynamic objects that allows collisions
@@ -955,7 +974,7 @@ class PhysicsPointModel(PhysicsModel):
         self.pos = position
         self._pos_prior = None
         self.dir = direction  # Must be normed
-        self.mag = magnitude
+        self.mag = magnitude # TODO: not yet used
 
         self.check_collisions = True
         self.skip_pos_update = False
@@ -975,6 +994,10 @@ class PhysicsPointModel(PhysicsModel):
         if self._pos_prior is None:
             return
         self.pos = self._pos_prior
+
+    # TODO: change if magnitude is used
+    def reset_dir_mag(self):
+        self.dir = Vec2(0, 0)
 
 
 # Basic circle model
