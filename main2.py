@@ -11,6 +11,12 @@ from typing import List, Set, Tuple
 # Tiles are typically 16x16 oder 32x32
 # Todo: draw tiles in a single call
 
+def rad2deg(angle_in_radians):
+    return angle_in_radians * 180 / math.pi
+
+def deg2rad(angle_in_deg):
+    return angle_in_deg * math.pi / 180
+
 # matrix is here defined as a nxn list array
 # TODO: conceptually used several times
 def get_sub_matrix(matrix, start_x, start_y, width, height):
@@ -100,8 +106,14 @@ class Vec2:
     def scalar_product(self, other):
         return self.x * other.x + self.y * other.y
 
+    def inner_angle(self, other):
+        return math.acos(self.scalar_product(other) / (self.abs() * other.abs()))
+
     def get_normal(self):
-        return Vec2(self.y, -self.x)
+        return Vec2.as_unit(Vec2(self.y, -self.x))
+
+    def get_counter(self):
+        return Vec2(-self.x , -self.y)
 
     def to_unit(self):
         absolute = self.abs()
@@ -164,14 +176,15 @@ class Straight:
         delta_y = point.y - self.support_vec.y
 
         if self.dir_vec.x == 0:
-            if delta_x != 0:
+            if round(delta_x, self.DECIMAL_PRECISION) != 0:
                 return None
             r1 = None # can be anything
         else:
             r1 = delta_x / self.dir_vec.x
 
         if self.dir_vec.y == 0:
-            if delta_y != 0:
+            if round(delta_y, self.DECIMAL_PRECISION) != 0:
+                print("DELTA Y", delta_y)
                 return None
             r2 = None
         else:
@@ -227,6 +240,18 @@ class Straight:
         # Check first equation
         return self.get_point(r) if 0 == round(r * self.dir_vec.x - s * other_straight.dir_vec.x - delta_x, self.DECIMAL_PRECISION) else None
 
+    def get_reflection_angle(self, vec: Vec2):
+        norm_vec = self.dir_vec.get_normal()
+        a = vec.inner_angle(norm_vec)
+        return a if a <= math.pi / 2 else math.pi - a
+
+    def get_reflection_vec(self, vec: Vec2):
+        norm_vec = self.dir_vec.get_normal()
+        a = vec.inner_angle(norm_vec)
+        norm_vec = norm_vec if a <= math.pi / 2 else norm_vec.get_counter()
+
+        return vec - norm_vec * 2 * (vec.scalar_product(norm_vec) / norm_vec.abs())
+
 
 # Maybe as Straight sublass changing all methods to check if on stretch,
 # since stretch is basically straight but with special check if point on stretch interval
@@ -240,7 +265,6 @@ class Stretch:
 
     def get_x(self, point: Vec2):
         r = self.straight.get_x(point)
-        
         if r is None:
             return None
         return r if 0 <= r <= 1 else None
@@ -250,6 +274,10 @@ class Stretch:
 
     def intersection_with_stretch(self, other_stretch):
         res = self.straight.intersection_with_straight(other_stretch.straight)
+
+        if other_stretch.start == Vec2(1088.0, 31.0) and res is not None:
+            print("iws", other_stretch.start, other_stretch.end, res, self.on_stretch(res), other_stretch.on_stretch(res), self.straight.get_x(res)) ### TODO: PROBLEM SEEMS TO BE THAT STRETCH CREATED BY MOVEMENT DOES NOT CHECK IF POINT IS ON IT CORRECTLY -> fixed?
+
         if res is None:
             return None
         return res if self.on_stretch(res) and other_stretch.on_stretch(res) else None
@@ -620,7 +648,7 @@ class Renderer:
 class Game:
     def __init__(self, width, height):
         self.screen = pygame.display.set_mode((width, height), pygame.RESIZABLE)
-        self.fps_cap = 0 # 0 equals None
+        self.fps_cap = 10 # 0 equals None
 
         self.grid_manager = MapGridManager(self.screen, *(41, 21), 0.1)
         self.renderer = Renderer()
@@ -734,6 +762,7 @@ class Game:
 
     # ======
 
+    # TODO: old border has to be removed => or "replaced"
     def screen_resize_handler(self):
         self.grid_manager.update_grid()
         self.init_render_update()
@@ -775,6 +804,10 @@ class PhysicsHandler:
         # Do not update walls for movement and collision
         if update_obj.MOVEMENT_STATIC:
             return
+
+        # Apply changes
+        update_obj.update_position(dt)
+
         # Check if collisions are happening
         # Trivial solution: test against all objects (in the future: use grid based system from tiles)
         for obj in self.physics_objects:
@@ -782,10 +815,10 @@ class PhysicsHandler:
                 continue
 
             # TODO: get physics model here? It must be implemented anyways
+            # ASSUMPTION: prior position is ALWAYS legal
             CollisionHandler.check_and_resolve(dt, update_obj, obj)
 
-        # Apply changes
-        update_obj.update_position(dt)
+
 
     def update_all(self, dt):
         while not self.update_queue.empty():
@@ -842,18 +875,18 @@ class CollisionHandler:
 
         collision_detected = False
 
-        c_pos = circle_model.pos
-        c_pos_next = circle_model.next_position(dt)
-
+        c_pos_original = circle_model.prior_position()
+        c_pos_new = circle_model.pos
         # First check movement path collision otherwise distance
 
-        if c_pos != c_pos_next:
+        if c_pos_original != c_pos_new:
             tmp_mvmt_stretch = Stretch(
-                circle_model.pos,
-                circle_model.next_position(dt)
+                c_pos_original,
+                c_pos_new
             )
             # Check collision with straight (point refers to intersected point on stretch)
             collision_point = tmp_mvmt_stretch.intersection_with_stretch(tmp_barrier_stretch)
+            #print(collision_point, c_pos_original, c_pos_new)
             if collision_point is not None:
                 collision_detected = True
 
@@ -864,15 +897,34 @@ class CollisionHandler:
             if distance <= 0:
                 collision_detected = True
 
+        # Resolve collision
         if collision_detected:
-            print("correct collision")
-            return
+            # TODO: How to incorporate "reflection" (do here or in object with handler => reflection is not always wanted)? Add collision handler for physics object?
 
-            # Resolve collision
-            # print("Collision detected")
+            # Get intersection
+
+            if c_pos_original != c_pos_new:
+                dir_vec = c_pos_new - c_pos_original
+                tmp_mvmt_straight = Straight(
+                    c_pos_original,
+                    dir_vec
+                )
+
+            else: # edge case if no movement but collision
+                dir_vec = b_stretch.straight.dir_vec.get_normal() #TODO: choose correct normal vector
+                tmp_mvmt_straight = Straight(
+                    c_pos_original,
+                    dir_vec
+                )
+
+            collision_point_stretch = tmp_mvmt_straight.intersection_with_straight(b_stretch.straight)
+            #angle =  dir_vec.inner_angle(b_stretch.straight.dir_vec.get_normal())
+            #circle_model.pos = collision_point_stretch - Vec2.as_unit(dir_vec) * ((circle_model.radius + 1) / math.cos(angle)) # cos cancels acos
+            circle_model.pos = collision_point_stretch - Vec2.as_unit(dir_vec) * ((circle_model.radius + 1) / (dir_vec.scalar_product(b_stretch.straight.dir_vec.get_normal()) / dir_vec.abs()))
 
 
-# Abstract physical representation of dynamic objects
+
+# Abstract physical representation of dynamic objects that allows collisions
 class PhysicsModel(ABC):
     MOVEMENT_STATIC = False # No movement code must be supplied
 
@@ -883,7 +935,16 @@ class PhysicsModel(ABC):
         if not self.MOVEMENT_STATIC:
             raise NotImplementedError
 
+    def prior_position(self):
+        if not self.MOVEMENT_STATIC:
+            raise NotImplementedError
+
     def update_position(self, dt):
+        if not self.MOVEMENT_STATIC:
+            raise NotImplementedError
+
+    # TODO: actually needed?
+    def revert_position(self):
         if not self.MOVEMENT_STATIC:
             raise NotImplementedError
 
@@ -892,6 +953,7 @@ class PhysicsPointModel(PhysicsModel):
     def __init__(self, position, direction, magnitude, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.pos = position
+        self._pos_prior = None
         self.dir = direction  # Must be normed
         self.mag = magnitude
 
@@ -903,14 +965,23 @@ class PhysicsPointModel(PhysicsModel):
         return self.pos + self.dir * self.mag * dt
 
     def update_position(self, dt):
+        self._pos_prior = self.pos
         self.pos = self.next_position(dt)
+
+    def prior_position(self):
+        return self._pos_prior
+
+    def revert_position(self):
+        if self._pos_prior is None:
+            return
+        self.pos = self._pos_prior
 
 
 # Basic circle model
 class CirclePhysicsModel(PhysicsPointModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.radius = 10  # TODO: should scale with window size
+        self.radius = 30  # TODO: should scale with window size
         self.width = self.radius * 2
 
     def get_bounding_rect(self):
