@@ -10,12 +10,17 @@ from typing import List, Set, Tuple
 
 # Tiles are typically 16x16 oder 32x32
 # Todo: draw tiles in a single call
+# TODO: does smalltalk allow custom hashing for sets?
 
 def rad2deg(angle_in_radians):
     return angle_in_radians * 180 / math.pi
 
 def deg2rad(angle_in_deg):
     return angle_in_deg * math.pi / 180
+
+def pair_hash(x, y):
+    return hash((1 / 2) * (x + y) * (x + y + 1) + y)
+
 
 # matrix is here defined as a nxn list array
 # TODO: conceptually used several times
@@ -93,6 +98,9 @@ class Vec2:
 
     def __str__(self):
         return f"Vec2({self.x}, {self.y})"
+
+    def __hash__(self):
+        return hash(pair_hash(self.x, self.y))
 
     def abs(self):
         return abs(math.sqrt(self.x**2 + self.y**2))
@@ -410,7 +418,7 @@ class Tile(Drawable):
         return self.rect.x == other.rect.x and self.rect.y == other.rect.y and self.size == other.size and self.rect.pos == other.rect.pos and self.color == other.color
 
     def __hash__(self):
-        return hash((1/2) * ( self.rect.x + self.rect.y ) * ( self.rect.x + self.rect.y + 1 ) + self.rect.y + self.color.x + self.color.y + self.color.z)
+        return hash(pair_hash(self.rect.x, self.rect.y) + self.color.z)
 
 
 # Collection of Tiles
@@ -570,6 +578,7 @@ class MapGridManager:
         self.tile_set_out_of_map = TileSet.from_set(self.tiles_out_of_map)
         self.tile_grid_map = TileGrid.from_matrix(self.tiles_map_matrix)
         self.tile_grid_map_and_wall = TileGrid.from_matrix(self.tiles_map_and_wall_matrix)
+        # TODO: also for all tiles?
 
 
     def _setup_grid_tile_matrix(self) -> List[List[Vec2]]:
@@ -614,6 +623,7 @@ class MapGridManager:
         y_tile = math.ceil(pos_corrected.y // self.tile_size_width)
         return Vec2(x_tile, y_tile)
 
+    # TODO: very similar to submatrix code and could also be implemented in TileGrid class
     def get_tiles_by_rect(self, rect):
         upper_left_pos = Vec2(rect[0], rect[1])
         lower_right_pos = Vec2(upper_left_pos.x + rect[2], upper_left_pos.y + rect[3])
@@ -624,10 +634,25 @@ class MapGridManager:
         tiles = set()
 
         for y in range(start_y, end_y + 1):
+
+            if not self.tile_pos_y_is_valid(y):
+                continue
+
             for x in range(start_x, end_x + 1):
+
+                if not self.tile_pos_x_is_valid(x):
+                    continue
+
                 tiles.add(self.grid_tile_matrix[y][x])
 
         return tiles
+
+    # TODO: see considerations of get_tiles_by_rect func
+    def tile_pos_x_is_valid(self, x):
+        return 0 <= x <= self.tile_width - 1
+
+    def tile_pos_y_is_valid(self, y):
+        return 0 <= y <= self.tile_height - 1
 
 
 # Render anything using proactive update calls for each drawable object
@@ -661,13 +686,13 @@ class Game:
         self.running = False
 
         # === Game Logic
-
+        # TODO: extend barriers slightly
         self.max_speed = 0.6
         self.turn_speed = 0.008
         self.stop_speed = 0.006
 
         self.player_1 = Player(self.screen, pos=Vec2(100, 100), direction=Vec2(1, 0), speed=1)
-        self.physics_handler.physics_objects.append(self.player_1.physics_model)
+        self.physics_handler.physics_objects.add(self.player_1.physics_model)
 
         self.dynamic_objects = set()
         self.dynamic_objects.add(self.player_1)
@@ -710,7 +735,8 @@ class Game:
     def update_realtime_objs(self):
         # Get position before, to redraw tiles (bounding rectangle necessary)
         bounding_rect = self.player_1.physics_model.get_bounding_rect() # Extra class for rect?
-        player_tiles = self.grid_manager.get_tiles_by_rect(bounding_rect)
+        player_tiles = self.grid_manager.get_tiles_by_rect(bounding_rect) # TODO: if no player tiles are returned player must have left map
+        # assert len(player_tiles) > 0, "player left map"
         for t in player_tiles:
             t.color = Vec3(0, 255, 0)
             self.renderer.add_to_update_queue(t)
@@ -730,6 +756,7 @@ class Game:
 
         self.handle_key_input(pygame.key.get_pressed(), dt)
 
+    # TODO: incorporate proper input handler + Upgrade movement logic
     def handle_key_input(self, keys, dt):
         # TODO: automatically update moving objects (dynamic objects) (rendering; physics)
 
@@ -770,6 +797,7 @@ class Game:
     def screen_resize_handler(self):
         self.grid_manager.update_grid()
         self.init_render_update()
+        self.remove_map_barrier()
         self.build_map_barrier()
 
     # Draw everything at least once
@@ -781,12 +809,27 @@ class Game:
         # build map barrier collisions
         upper_left_c, upper_right_c, lower_right_c, lower_left_c = self.grid_manager.tile_grid_map_and_wall.get_corner_tiles()
 
+        # TODO: dont use exact corners
         top_wall = BorderWall(upper_left_c.rect.get_lower_right(), upper_right_c.rect.get_lower_left())
         right_wall = BorderWall(upper_right_c.rect.get_lower_left(), lower_right_c.rect.get_upper_left())
         bottom_wall = BorderWall(lower_right_c.rect.get_upper_left(), lower_left_c.rect.get_upper_right())
         left_wall = BorderWall(lower_left_c.rect.get_upper_right(), upper_left_c.rect.get_lower_right())
+        self.barrier_walls = [top_wall, right_wall, bottom_wall, left_wall]
 
-        self.physics_handler.physics_objects += [top_wall.physics_model, right_wall.physics_model, bottom_wall.physics_model, left_wall.physics_model] # TODO: how are objects removed?
+        # Inefficient for deletion / TODO: use set?
+        self.physics_handler.physics_objects = self.physics_handler.physics_objects.union(
+            {i.physics_model for i in self.barrier_walls}
+        )  # TODO: how are objects removed?
+
+    # TODO: solve this better
+    def remove_map_barrier(self):
+        if self.barrier_walls is None: # barrier walls must be defined in init
+            return
+
+        for i in self.barrier_walls:
+            self.physics_handler.physics_objects.remove(i.physics_model)
+
+        print(len(self.barrier_walls))
 
 
 # Has to resolve any physics related task during each tick. Includes
@@ -795,7 +838,7 @@ class Game:
 # - do that efficiently (check game chunk wise; separate between dynamic and static objects
 class PhysicsHandler:
     def __init__(self):
-        self.physics_objects = list() # should be set
+        self.physics_objects = set() # should be set
         self.update_queue = queue.Queue()
 
     def add_to_update_queue(self, obj):
@@ -1004,7 +1047,7 @@ class PhysicsPointModel(PhysicsModel):
 class CirclePhysicsModel(PhysicsPointModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.radius = 30  # TODO: should scale with window size
+        self.radius = 12  # TODO: should scale with window size
         self.width = self.radius * 2
 
     def get_bounding_rect(self):
@@ -1025,6 +1068,9 @@ class StaticBarrierModel(PhysicsModel):
 
     def get_stretch(self):
         return Stretch(self.start, self.end)
+
+    def __hash__(self):
+        return hash(hash(self.start) + hash(self.end))
 
 
 class PlayerPhysicsModel(CirclePhysicsModel):
